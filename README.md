@@ -1,5 +1,7 @@
 # SMB Controller
 
+[Chinese README](./README.zh-CN.md)
+
 Go-based Samba control panel with SQLite, session auth, embedded WebUI, and generated `smb.conf`.
 
 ## Security Warning
