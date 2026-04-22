@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMB Controller Setup</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="auth-page">
+  <main class="auth-panel">
+    <h1>欢迎使用 SMB Controller</h1>
+    <p>请设置管理员账户以开始使用。管理员只用于登录控制面板，不会自动成为 SMB 用户。</p>
+    <form id="setup-form">
+      <label>用户名<span class="hint">3-32 位，只允许英文字母、数字和下划线。</span><input name="username" autocomplete="username" required minlength="3" data-validate="username"></label>
+      <div class="field-message" data-for="username"></div>
+      <label>密码<span class="hint">至少 8 位，必须包含大写字母、小写字母和数字。</span><input name="password" type="password" autocomplete="new-password" required minlength="8" data-validate="password"></label>
+      <div class="field-message" data-for="password"></div>
+      <label>确认密码<span class="hint">请再次输入同一个密码。</span><input name="confirm" type="password" autocomplete="new-password" required minlength="8" data-validate="confirm-password"></label>
+      <div class="field-message" data-for="confirm"></div>
+      <button type="submit">初始化并开始使用</button>
+    </form>
+    <div id="message" class="message"></div>
+  </main>
+  <script src="/static/js/api.js?v=20260423-2"></script>
+  <script src="/static/js/validation.js?v=20260423-2"></script>
+  <script>
+    attachLiveValidation(document.querySelector('#setup-form'));
+    api.get('/setup/status').then(s => { if (s.initialized) location.href = '/login'; });
+    document.querySelector('#setup-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!validateForm(event.currentTarget)) return;
+      const form = new FormData(event.currentTarget);
+      const message = document.querySelector('#message');
+      if (form.get('password') !== form.get('confirm')) {
+        message.textContent = '两次输入的密码不一致';
+        return;
+      }
+      try {
+        await api.post('/setup/init', { username: form.get('username'), password: form.get('password') });
+        location.href = '/login';
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMB Controller</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <strong>SMB Controller</strong>
+      <span id="session-user"></span>
+      <button id="logout">退出</button>
+    </header>
+    <aside>
+      <button class="nav active" data-view="volumes">卷管理</button>
+      <button class="nav" data-view="users">用户管理</button>
+      <button class="nav" data-view="permissions">权限管理</button>
+      <button class="nav" data-view="system">系统状态</button>
+      <button class="nav" data-view="about">关于</button>
+    </aside>
+    <main>
+      <section id="volumes" class="view active">
+        <div class="toolbar"><h2>卷管理</h2><button data-modal="volume-modal">新建卷</button></div>
+        <p class="section-help">卷是 Samba 对外发布的共享目录。创建卷会写入 smb.conf；如果勾选自动创建目录，后端会在本机创建对应路径。</p>
+        <table><thead><tr><th>共享名</th><th>路径</th><th>状态</th><th>匿名</th><th>操作</th></tr></thead><tbody id="volume-table"></tbody></table>
+      </section>
+      <section id="users" class="view">
+        <div class="toolbar"><h2>用户管理</h2><button data-modal="temp-user-modal">新建临时用户</button><button data-modal="user-modal">新建用户</button></div>
+        <p class="section-help">SMB 用户会对应 Linux 系统用户，并通过 smbpasswd 设置 Samba 密码。用户名只能包含英文字母、数字和下划线。</p>
+        <table><thead><tr><th>用户名</th><th>类型</th><th>显示名</th><th>状态</th><th>过期时间</th><th>操作</th></tr></thead><tbody id="user-table"></tbody></table>
+      </section>
+      <section id="permissions" class="view">
+        <div class="toolbar"><h2>权限管理</h2><button id="reload-permissions">刷新</button></div>
+        <p class="section-help">权限矩阵按“用户 × 卷”展示访问规则。选择只读或读写会立即保存并重新生成 Samba 配置；无权限会移除该用户对该卷的访问。</p>
+        <div class="permission-tools">
+          <div>
+            <h3>批量授权</h3>
+            <p class="hint">超级管理员可一次性给某个用户授权多个卷，或给某个卷授权多个用户。</p>
+          </div>
+          <label>用户范围<select id="bulk-user"></select></label>
+          <label>卷范围<select id="bulk-volume"></select></label>
+          <label>权限<select id="bulk-access">
+            <option value="read">只读</option>
+            <option value="readwrite">读写</option>
+            <option value="none">无权限</option>
+          </select></label>
+          <button id="apply-bulk-permissions">应用批量授权</button>
+        </div>
+        <div id="permission-summary" class="permission-summary"></div>
+        <div id="permission-matrix" class="matrix"></div>
+        <div id="permission-detail" class="permission-detail"></div>
+      </section>
+      <section id="system" class="view">
+        <div class="toolbar"><h2>系统状态</h2><button id="reload-smbd">Reload</button><button id="restart-smbd">Restart</button></div>
+        <p class="section-help">这里展示 smbd 检测结果、受管资源数量和当前生成的 smb.conf。Reload 通常不中断连接，Restart 会重启 smbd 服务。</p>
+        <div class="status-grid" id="system-status"></div>
+        <form id="settings-form" class="inline-form">
+          <label>Workgroup<span class="hint">Windows 网络工作组名，默认 WORKGROUP。</span><input name="smb_workgroup"></label>
+          <label>Server String<span class="hint">客户端看到的服务器描述。</span><input name="smb_server_string"></label>
+          <label>NetBIOS Name<span class="hint">可选；为空时使用系统默认主机名。</span><input name="smb_netbios_name"></label>
+          <button type="submit">保存设置</button>
+        </form>
+        <pre id="conf-preview"></pre>
+      </section>
+      <section id="about" class="view">
+        <div class="toolbar"><h2>关于</h2></div>
+        <div class="about-panel">
+          <h3>SMB Controller 是什么</h3>
+          <p>SMB Controller 是一个运行在 Linux 服务器上的 Samba 管理面板，用于通过 Web UI 管理 SMB 共享目录、SMB 用户、访问权限和 Samba 配置生成。</p>
+          <h3>它解决什么问题</h3>
+          <p>传统 Samba 管理需要手工编辑 smb.conf、维护 smbpasswd、处理 Linux 用户和目录权限。这个项目把这些操作收敛到一个控制面板，并在修改后自动生成配置、修复目录权限、reload smbd。</p>
+          <h3>核心能力</h3>
+          <ul>
+            <li>创建和管理共享卷，并同步到底层 smb.conf。</li>
+            <li>创建普通用户和临时用户，临时用户到期后自动清理。</li>
+            <li>按用户和卷精细化设置无权限、只读、读写权限。</li>
+            <li>限制可信访问域名，降低管理入口被错误域名访问的风险。</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="volume-modal">
+    <form method="dialog" id="volume-form">
+      <h3>新建卷</h3>
+      <p class="dialog-help">卷会成为一个 SMB 共享。路径必须是本机绝对路径且不能以多余斜杠结尾。</p>
+      <label>共享名<span class="hint">客户端看到的共享名称，只允许英文字母、数字、下划线和连字符。</span><input name="share_name" required data-validate="share"></label>
+      <div class="field-message" data-for="share_name"></div>
+      <label>路径<span class="hint">示例：/srv/samba/data。不要填写 /srv/samba/、./data 或包含 .. 的路径。</span><input name="path" required value="/srv/samba" data-validate="path"></label>
+      <div class="field-message" data-for="path"></div>
+      <label>描述<span class="hint">可选；会写入 smb.conf 的 comment 字段。</span><input name="comment"></label>
+      <label class="check"><input name="browseable" type="checkbox" checked> 可浏览 <span class="hint">允许客户端在网络浏览中看到该共享。</span></label>
+      <label class="check"><input name="guest_ok" type="checkbox"> 匿名访问 <span class="hint">允许未登录用户访问，谨慎开启。</span></label>
+      <label class="check"><input name="create_dir_if_not_exists" type="checkbox" checked> 自动创建目录 <span class="hint">路径不存在时由后端创建。</span></label>
+      <div class="form-error" data-form-error></div>
+      <div class="dialog-actions"><button type="button" data-close-dialog>取消</button><button id="save-volume" value="default">保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="user-modal">
+    <form method="dialog" id="user-form">
+      <h3>新建用户</h3>
+      <p class="dialog-help">创建用户会创建或复用 Linux 系统用户，并写入 Samba 密码库。</p>
+      <label>用户名<span class="hint">3-32 位，只允许英文字母、数字和下划线，例如 smb_user01。</span><input name="username" required data-validate="username" autocomplete="off"></label>
+      <div class="field-message" data-for="username"></div>
+      <label>显示名<span class="hint">仅用于控制面板展示，不影响 Samba 登录名。</span><input name="display_name"></label>
+      <label>密码<span class="hint">至少 8 位，必须包含大写字母、小写字母和数字。</span><input name="password" type="password" required data-validate="password" autocomplete="new-password"></label>
+      <div class="field-message" data-for="password"></div>
+      <div class="form-error" data-form-error></div>
+      <div class="dialog-actions"><button type="button" data-close-dialog>取消</button><button id="save-user" value="default">保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="temp-user-modal">
+    <form method="dialog" id="temp-user-form">
+      <h3>新建临时用户</h3>
+      <p class="dialog-help">系统会自动生成用户名和密码。密码只在创建成功后显示一次，请立即交给使用者保存。</p>
+      <label>有效时长（小时）<span class="hint">最短 1 小时，最长 336 小时（14 天）。</span><input name="duration_hours" type="number" min="1" max="336" value="24" required></label>
+      <label>默认授权卷<span class="hint">可选；创建后也可以在权限管理里继续调整。</span><select name="volume_id" id="temp-user-volume"></select></label>
+      <label>默认权限<select name="access">
+        <option value="read">只读</option>
+        <option value="readwrite">读写</option>
+        <option value="none">不自动授权</option>
+      </select></label>
+      <div class="form-error" data-form-error></div>
+      <div class="dialog-actions"><button type="button" data-close-dialog>取消</button><button id="save-temp-user" value="default">创建临时用户</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="temp-credential-modal">
+    <form method="dialog" id="temp-credential-form">
+      <h3>临时用户凭据</h3>
+      <p class="dialog-help">密码只显示这一次。关闭后无法再次查看，只能重置或重新创建临时用户。</p>
+      <div class="credential-box">
+        <label>用户名<input id="temp-credential-username" readonly></label>
+        <label>密码<input id="temp-credential-password" readonly></label>
+        <label>过期时间<input id="temp-credential-expires" readonly></label>
+      </div>
+      <div class="dialog-actions"><button type="button" id="copy-temp-credential">复制凭据</button><button type="button" data-close-dialog>关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="password-modal">
+    <form method="dialog" id="password-form">
+      <h3>修改密码</h3>
+      <p class="dialog-help">这里只更新 Samba 密码，不会在数据库中保存明文密码。</p>
+      <input type="hidden" name="id">
+      <label>新密码<span class="hint">至少 8 位，必须包含大写字母、小写字母和数字。</span><input name="new_password" type="password" required data-validate="password"></label>
+      <div class="field-message" data-for="new_password"></div>
+      <div class="form-error" data-form-error></div>
+      <div class="dialog-actions"><button type="button" data-close-dialog>取消</button><button id="save-password" value="default">保存</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast"></div>
+  <script src="/static/js/api.js?v=20260423-5"></script>
+  <script src="/static/js/validation.js?v=20260423-5"></script>
+  <script src="/static/js/app.js?v=20260423-5"></script>
+</body>
+</html>

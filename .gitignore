@@ -1,0 +1,44 @@
+# Local editor and assistant state
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Go build outputs
+/smb-controller
+/smb-controller-*
+*.exe
+*.test
+*.out
+/dist/
+/build/
+/coverage/
+coverage.out
+
+# Runtime state and local config
+/data.db
+/data.db-*
+/*.db
+/*.sqlite
+/*.sqlite3
+/conf-backups/
+/logs/
+*.log
+config.yaml
+!config.yaml.example
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+
+# Dependency and tooling caches
+/.cache/
+/vendor/
+

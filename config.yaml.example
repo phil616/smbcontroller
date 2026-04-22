@@ -1,0 +1,29 @@
+server:
+  listen: "127.0.0.1:8080"
+  # Optional trusted public origins. When non-empty, requests outside this list are rejected.
+  # domain:
+  #   - "https://smb.example.com"
+  #   - "http://smb.example.com"
+
+database:
+  path: "/var/lib/smb-controller/data.db"
+
+smb:
+  conf_path: "/etc/samba/smb.conf"
+  backup_dir: "/var/lib/smb-controller/conf-backups"
+  backup_max_count: 5
+  managed_group: "smbctrl"
+  allowed_share_roots:
+    - "/srv/samba"
+    - "/data"
+    - "/mnt"
+    - "/media"
+  reload_command: "systemctl reload smbd"
+  restart_command: "systemctl restart smbd"
+
+session:
+  ttl_hours: 8
+
+log:
+  level: "info"
+  file: "/var/log/smb-controller/app.log"
