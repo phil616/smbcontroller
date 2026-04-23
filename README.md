@@ -54,4 +54,21 @@ Supported examples:
 SMB_CTRL_SERVER_LISTEN="127.0.0.1:9090"
 SMB_CTRL_DATABASE_PATH="/var/lib/smb-controller/data.db"
 SMB_CTRL_SMB_CONF_PATH="/etc/samba/smb.conf"
+SMB_CTRL_SMB_SERVER_MIN_PROTOCOL="SMB2_02"
+SMB_CTRL_SMB_SERVER_MAX_PROTOCOL="SMB3"
 ```
+
+## SMB Protocol Compatibility
+
+The Samba server protocol dialect range can be configured:
+
+```yaml
+smb:
+  server_min_protocol: "SMB2_02"
+  server_max_protocol: "SMB3"
+```
+
+These values are rendered into `smb.conf` as `server min protocol` and `server max protocol`.
+The Samba `smb.conf(5)` manual documents these options and notes that automatic SMB negotiation normally chooses the appropriate dialect. This project defaults to `SMB2_02` through `SMB3` as a modern baseline that disables SMB1/NT1. Set both values to empty strings if you want to omit the directives and defer to your Samba build or distribution defaults.
+
+Reference: <https://www.samba.org/samba/samba/docs/man/manpages/smb.conf.5.html>

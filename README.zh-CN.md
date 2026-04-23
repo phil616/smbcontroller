@@ -73,6 +73,10 @@ smb:
     - "/data"
     - "/mnt"
     - "/media"
+  # SMB 协议版本范围。默认禁用 SMB1，优先使用 SMB2/SMB3。
+  # 如需完全使用 Samba 自身默认值，可设置为空字符串。
+  server_min_protocol: "SMB2_02"
+  server_max_protocol: "SMB3"
   reload_command: "systemctl reload smbd"
   restart_command: "systemctl restart smbd"
 
@@ -89,9 +93,35 @@ SMB_CTRL_SERVER_LISTEN="127.0.0.1:9090"
 SMB_CTRL_DATABASE_PATH="/var/lib/smb-controller/data.db"
 SMB_CTRL_SMB_CONF_PATH="/etc/samba/smb.conf"
 SMB_CTRL_SERVER_DOMAIN="https://smb.example.com,http://smb.example.com"
+SMB_CTRL_SMB_SERVER_MIN_PROTOCOL="SMB2_02"
+SMB_CTRL_SMB_SERVER_MAX_PROTOCOL="SMB3"
 ```
+
+## SMB 协议兼容版本
+
+可以通过配置文件限制 Samba 服务端允许协商的 SMB 协议版本：
+
+```yaml
+smb:
+  server_min_protocol: "SMB2_02"
+  server_max_protocol: "SMB3"
+```
+
+生成的 `smb.conf` 会写入：
+
+```ini
+server min protocol = SMB2_02
+server max protocol = SMB3
+```
+
+参考 Samba 官方 `smb.conf(5)` 文档，`server min protocol` 控制服务端允许客户端使用的最低协议版本，`server max protocol` 控制最高协议版本；官方文档也说明通常不需要手动设置，因为 SMB 协商阶段会自动选择合适协议。本项目出于现代安全基线考虑，默认使用 `SMB2_02` 到 `SMB3`，也就是禁用 SMB1/NT1。
+
+可用值包括：`CORE`、`COREPLUS`、`LANMAN1`、`LANMAN2`、`NT1`、`SMB2`、`SMB2_02`、`SMB2_10`、`SMB2_22`、`SMB2_24`、`SMB3`、`SMB3_00`、`SMB3_02`、`SMB3_10`、`SMB3_11`。
+
+不建议为了兼容旧设备启用 `NT1`/SMB1，除非你完全理解这会降低安全性。
+
+参考文档：<https://www.samba.org/samba/samba/docs/man/manpages/smb.conf.5.html>
 
 ## 许可证
 
 本项目使用 MIT License，详见 [LICENSE](./LICENSE)。
-

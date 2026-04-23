@@ -18,6 +18,12 @@ smb:
     - "/data"
     - "/mnt"
     - "/media"
+  # SMB protocol dialect limits for Samba server negotiation.
+  # Samba's official smb.conf manual says automatic negotiation normally handles this,
+  # but for modern deployments this project defaults to disabling SMB1.
+  # Use empty strings to omit these directives and defer to your Samba build/distro defaults.
+  server_min_protocol: "SMB2_02"
+  server_max_protocol: "SMB3"
   reload_command: "systemctl reload smbd"
   restart_command: "systemctl restart smbd"
 

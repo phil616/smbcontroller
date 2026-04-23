@@ -11,8 +11,15 @@ type Services struct {
 	System *SystemService
 }
 
-func NewServices(repos *repository.Repositories, executor *smb.Executor, generator *smb.Generator, detector *smb.Detector, detectResult smb.DetectResult, allowedShareRoots []string) *Services {
-	smbSvc := &SMBService{repos: repos, executor: executor, generator: generator, allowedShareRoots: allowedShareRoots}
+func NewServices(repos *repository.Repositories, executor *smb.Executor, generator *smb.Generator, detector *smb.Detector, detectResult smb.DetectResult, allowedShareRoots []string, serverMinProtocol, serverMaxProtocol string) *Services {
+	smbSvc := &SMBService{
+		repos:             repos,
+		executor:          executor,
+		generator:         generator,
+		allowedShareRoots: allowedShareRoots,
+		serverMinProtocol: serverMinProtocol,
+		serverMaxProtocol: serverMaxProtocol,
+	}
 	return &Services{
 		Admin:  &AdminService{repos: repos},
 		SMB:    smbSvc,

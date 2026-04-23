@@ -22,6 +22,8 @@ type SMBService struct {
 	executor          *smb.Executor
 	generator         *smb.Generator
 	allowedShareRoots []string
+	serverMinProtocol string
+	serverMaxProtocol string
 	mu                sync.Mutex
 }
 
@@ -493,8 +495,14 @@ func (s *SMBService) applyConfig(ctx context.Context) error {
 		return err
 	}
 	data := smb.ConfigData{
-		GeneratedAt:   time.Now().In(time.Local).Format(time.RFC3339),
-		GlobalSection: smb.GlobalSection{Workgroup: settings.Workgroup, ServerString: settings.ServerString, NetbiosName: settings.NetbiosName},
+		GeneratedAt: time.Now().In(time.Local).Format(time.RFC3339),
+		GlobalSection: smb.GlobalSection{
+			Workgroup:         settings.Workgroup,
+			ServerString:      settings.ServerString,
+			NetbiosName:       settings.NetbiosName,
+			ServerMinProtocol: s.serverMinProtocol,
+			ServerMaxProtocol: s.serverMaxProtocol,
+		},
 	}
 	for _, volume := range volumes {
 		if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {

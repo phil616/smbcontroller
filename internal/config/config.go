@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ type SmbConfig struct {
 	BackupMaxCount    int      `yaml:"backup_max_count"`
 	ManagedGroup      string   `yaml:"managed_group"`
 	AllowedShareRoots []string `yaml:"allowed_share_roots"`
+	ServerMinProtocol string   `yaml:"server_min_protocol"`
+	ServerMaxProtocol string   `yaml:"server_max_protocol"`
 	ReloadCommand     string   `yaml:"reload_command"`
 	RestartCommand    string   `yaml:"restart_command"`
 }
@@ -59,6 +62,8 @@ func Default() Config {
 			BackupMaxCount:    5,
 			ManagedGroup:      "smbctrl",
 			AllowedShareRoots: []string{"/srv/samba", "/data", "/mnt", "/media"},
+			ServerMinProtocol: "SMB2_02",
+			ServerMaxProtocol: "SMB3",
 			ReloadCommand:     "systemctl reload smbd",
 			RestartCommand:    "systemctl restart smbd",
 		},
@@ -80,6 +85,11 @@ func Load(path string) (Config, error) {
 		}
 	}
 	applyEnv(&cfg)
+	if err := validateSMBProtocols(cfg.Smb.ServerMinProtocol, cfg.Smb.ServerMaxProtocol); err != nil {
+		return cfg, err
+	}
+	cfg.Smb.ServerMinProtocol = normalizeSMBProtocol(cfg.Smb.ServerMinProtocol)
+	cfg.Smb.ServerMaxProtocol = normalizeSMBProtocol(cfg.Smb.ServerMaxProtocol)
 	return cfg, nil
 }
 
@@ -91,6 +101,8 @@ func applyEnv(cfg *Config) {
 	setString("SMB_CTRL_SMB_BACKUP_DIR", &cfg.Smb.BackupDir)
 	setString("SMB_CTRL_SMB_MANAGED_GROUP", &cfg.Smb.ManagedGroup)
 	setStringSlice("SMB_CTRL_SMB_ALLOWED_SHARE_ROOTS", &cfg.Smb.AllowedShareRoots)
+	setString("SMB_CTRL_SMB_SERVER_MIN_PROTOCOL", &cfg.Smb.ServerMinProtocol)
+	setString("SMB_CTRL_SMB_SERVER_MAX_PROTOCOL", &cfg.Smb.ServerMaxProtocol)
 	setString("SMB_CTRL_SMB_RELOAD_COMMAND", &cfg.Smb.ReloadCommand)
 	setString("SMB_CTRL_SMB_RESTART_COMMAND", &cfg.Smb.RestartCommand)
 	setString("SMB_CTRL_LOG_LEVEL", &cfg.Log.Level)
@@ -125,4 +137,67 @@ func setInt(key string, target *int) {
 			*target = parsed
 		}
 	}
+}
+
+func validateSMBProtocols(minProtocol, maxProtocol string) error {
+	minProtocol = normalizeSMBProtocol(minProtocol)
+	maxProtocol = normalizeSMBProtocol(maxProtocol)
+	if minProtocol == "" && maxProtocol == "" {
+		return nil
+	}
+	if minProtocol != "" && !isKnownSMBProtocol(minProtocol) {
+		return fmt.Errorf("invalid smb.server_min_protocol %q; allowed values: %s", minProtocol, strings.Join(smbProtocolValues, ", "))
+	}
+	if maxProtocol != "" && !isKnownSMBProtocol(maxProtocol) {
+		return fmt.Errorf("invalid smb.server_max_protocol %q; allowed values: %s", maxProtocol, strings.Join(smbProtocolValues, ", "))
+	}
+	if minProtocol != "" && maxProtocol != "" && smbProtocolRank[minProtocol] > smbProtocolRank[maxProtocol] {
+		return fmt.Errorf("invalid SMB protocol range: server_min_protocol %s is newer than server_max_protocol %s", minProtocol, maxProtocol)
+	}
+	return nil
+}
+
+func normalizeSMBProtocol(protocol string) string {
+	return strings.ToUpper(strings.TrimSpace(protocol))
+}
+
+func isKnownSMBProtocol(protocol string) bool {
+	_, ok := smbProtocolRank[protocol]
+	return ok
+}
+
+var smbProtocolValues = []string{
+	"CORE",
+	"COREPLUS",
+	"LANMAN1",
+	"LANMAN2",
+	"NT1",
+	"SMB2",
+	"SMB2_02",
+	"SMB2_10",
+	"SMB2_22",
+	"SMB2_24",
+	"SMB3",
+	"SMB3_00",
+	"SMB3_02",
+	"SMB3_10",
+	"SMB3_11",
+}
+
+var smbProtocolRank = map[string]int{
+	"CORE":     0,
+	"COREPLUS": 1,
+	"LANMAN1":  2,
+	"LANMAN2":  3,
+	"NT1":      4,
+	"SMB2":     5,
+	"SMB2_02":  5,
+	"SMB2_10":  6,
+	"SMB2_22":  7,
+	"SMB2_24":  8,
+	"SMB3":     9,
+	"SMB3_00":  9,
+	"SMB3_02":  10,
+	"SMB3_10":  11,
+	"SMB3_11":  12,
 }

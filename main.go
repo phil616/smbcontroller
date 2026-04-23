@@ -60,7 +60,7 @@ func main() {
 	executor := smb.NewExecutor(cfg.Smb)
 	generator := smb.NewGenerator(cfg.Smb.ConfPath, cfg.Smb.BackupDir, cfg.Smb.BackupMaxCount)
 	sessionStore := session.NewStore(time.Duration(cfg.Session.TTLHours) * time.Hour)
-	services := service.NewServices(repos, executor, generator, detector, detectResult, cfg.Smb.AllowedShareRoots)
+	services := service.NewServices(repos, executor, generator, detector, detectResult, cfg.Smb.AllowedShareRoots, cfg.Smb.ServerMinProtocol, cfg.Smb.ServerMaxProtocol)
 
 	stopSessions := make(chan struct{})
 	go sessionStore.Cleanup(stopSessions)
