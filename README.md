@@ -8,6 +8,8 @@ Go-based Samba control panel with SQLite, session auth, embedded WebUI, and gene
 
 **This program is a root-privileged system administration tool. Treat it as highly sensitive infrastructure, not as a normal web app.**
 
+You can check [CodeQLResult](https://github.com/phil616/smbcontroller/security/code-scanning) to understand the risks associated with the project. 
+
 SMB Controller manages Samba by editing `smb.conf`, creating Linux users, changing filesystem permissions, running `smbpasswd`, and reloading or restarting `smbd`. In normal operation it needs root privileges. If the WebUI or API is exposed incorrectly, a vulnerability may become a full system compromise.
 
 Do not expose this service directly to the public Internet unless you fully understand the risks and have reviewed your deployment. In particular:
