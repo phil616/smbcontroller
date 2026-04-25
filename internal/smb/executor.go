@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -86,6 +87,11 @@ func (e *Executor) EnsureSharePathPermissions(path string) error {
 	if err != nil {
 		return fmt.Errorf("invalid gid for group %s: %w", e.managedGroup, err)
 	}
+
+	return ensureShareTreePermissions(path, gid)
+}
+
+func ensureShareTreePermissions(path string, gid int) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -96,14 +102,39 @@ func (e *Executor) EnsureSharePathPermissions(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("share path must be a directory: %s", path)
 	}
-	if err := os.Chown(path, -1, gid); err != nil {
-		return fmt.Errorf("failed to set share group on %s: %w", path, err)
-	}
-	// #nosec G302 -- Samba share roots intentionally need group traversal and group write access.
-	if err := os.Chmod(path, 02775); err != nil {
-		return fmt.Errorf("failed to set share permissions on %s: %w", path, err)
-	}
-	return nil
+
+	return filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if err := os.Chown(entryPath, -1, gid); err != nil {
+			return fmt.Errorf("failed to set share group on %s: %w", entryPath, err)
+		}
+		mode := entryInfo.Mode()
+		switch {
+		case entryInfo.IsDir():
+			// #nosec G302 -- Samba share directories intentionally need group traversal/write access and setgid inheritance.
+			if err := os.Chmod(entryPath, mode|os.ModeSetgid|0770); err != nil {
+				return fmt.Errorf("failed to set share directory permissions on %s: %w", entryPath, err)
+			}
+		case mode.IsRegular():
+			// #nosec G302 -- read/write SMB users need group read/write on existing files; execute bits are preserved as-is.
+			if err := os.Chmod(entryPath, mode|0060); err != nil {
+				return fmt.Errorf("failed to set share file permissions on %s: %w", entryPath, err)
+			}
+		}
+		return nil
+	})
 }
 
 func (e *Executor) DeleteSmbUser(username string) error {

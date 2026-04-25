@@ -68,7 +68,9 @@ func normalizeAllowedOrigins(domains []string) map[string]struct{} {
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			continue
 		}
-		out[strings.ToLower(u.Scheme+"://"+u.Host)] = struct{}{}
+		if origin, ok := canonicalOrigin(u.Scheme, u.Host); ok {
+			out[origin] = struct{}{}
+		}
 	}
 	return out
 }
@@ -80,12 +82,34 @@ func isTrustedRequest(r *http.Request, allowed map[string]struct{}) bool {
 	}
 	host := r.Host
 	if requestFromLoopback(r) {
-		if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
+		forwardedProto, forwardedHost := forwardedRequestOrigin(r)
+		if forwardedProto != "" {
 			scheme = forwardedProto
 		}
-		if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		if forwardedHost != "" {
 			host = forwardedHost
 		}
+	}
+	origin, ok := canonicalOrigin(scheme, host)
+	if !ok {
+		return false
+	}
+	_, ok = allowed[origin]
+	return ok
+}
+
+func canonicalOrigin(scheme, host string) (string, bool) {
+	scheme = strings.ToLower(strings.TrimSpace(firstHeaderValue(scheme)))
+	host = strings.TrimSpace(firstHeaderValue(host))
+	if scheme != "http" && scheme != "https" || host == "" {
+		return "", false
+	}
+	if strings.Contains(host, "://") {
+		u, err := url.Parse(host)
+		if err != nil || u.Host == "" {
+			return "", false
+		}
+		host = u.Host
 	}
 	if hostOnly, port, err := net.SplitHostPort(host); err == nil {
 		defaultPort := scheme == "http" && port == "80" || scheme == "https" && port == "443"
@@ -93,8 +117,44 @@ func isTrustedRequest(r *http.Request, allowed map[string]struct{}) bool {
 			host = hostOnly
 		}
 	}
-	_, ok := allowed[strings.ToLower(scheme+"://"+host)]
-	return ok
+	host = strings.ToLower(host)
+	return scheme + "://" + host, true
+}
+
+func forwardedRequestOrigin(r *http.Request) (scheme, host string) {
+	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
+		scheme = forwardedProto
+	}
+	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if scheme != "" || host != "" {
+		return scheme, host
+	}
+	return parseForwardedOrigin(r.Header.Get("Forwarded"))
+}
+
+func parseForwardedOrigin(header string) (scheme, host string) {
+	first := firstHeaderValue(header)
+	for _, part := range strings.Split(first, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"`)
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "proto":
+			scheme = value
+		case "host":
+			host = value
+		}
+	}
+	return scheme, host
+}
+
+func firstHeaderValue(value string) string {
+	value, _, _ = strings.Cut(value, ",")
+	return strings.TrimSpace(value)
 }
 
 func requestFromLoopback(r *http.Request) bool {
@@ -110,5 +170,9 @@ func isSecureRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return requestFromLoopback(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if !requestFromLoopback(r) {
+		return false
+	}
+	forwardedProto, _ := forwardedRequestOrigin(r)
+	return strings.EqualFold(firstHeaderValue(forwardedProto), "https")
 }
