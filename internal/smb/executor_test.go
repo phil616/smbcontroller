@@ -53,6 +53,50 @@ func TestEnsureShareTreePermissionsRecursivelyFixesExistingEntries(t *testing.T)
 	assertGID(t, childFile, gid)
 }
 
+func TestEnsureShareTreePermissionsGrantsOwnerBitsOnLockedDownFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions are not supported on windows")
+	}
+
+	root := t.TempDir()
+	// Files created by other users sometimes land with no owner permissions
+	// at all (e.g. 0040, 0004). The previous implementation only ORed in
+	// group rw, so over SMB the original owner still saw "permission denied"
+	// when reading their own file — group bits are ignored once the access
+	// uid matches the owner uid.
+	ownerLocked := filepath.Join(root, "owner_locked.txt")
+	if err := os.WriteFile(ownerLocked, []byte("locked"), 0040); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureShareTreePermissions(root, os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+
+	assertMode(t, ownerLocked, 0777, 0660)
+}
+
+func TestEnsureShareTreePermissionsSkipsDanglingSymlinksAndFixesSiblings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions are not supported on windows")
+	}
+
+	root := t.TempDir()
+	good := filepath.Join(root, "good.txt")
+	if err := os.WriteFile(good, []byte("good"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "does-not-exist"), filepath.Join(root, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureShareTreePermissions(root, os.Getgid()); err != nil {
+		t.Fatalf("walk aborted unexpectedly: %v", err)
+	}
+
+	assertMode(t, good, 0660, 0660)
+}
+
 func assertMode(t *testing.T, path string, mask, want os.FileMode) {
 	t.Helper()
 	info, err := os.Lstat(path)

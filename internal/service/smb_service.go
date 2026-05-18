@@ -387,7 +387,7 @@ func (s *SMBService) SetPermission(ctx context.Context, userID, volumeID int64, 
 	}
 	if volume, err := s.repos.Volumes.Get(ctx, volumeID); err != nil || volume == nil {
 		return result, errors.New("volume not found")
-	} else if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {
+	} else if err := s.executor.EnsureShareTopPermissions(volume.Path); err != nil {
 		return result, err
 	}
 	if err := s.repos.Permissions.Upsert(ctx, userID, volumeID, access); err != nil {
@@ -426,7 +426,7 @@ func (s *SMBService) BulkSetPermissions(ctx context.Context, userIDs, volumeIDs 
 		if volume == nil {
 			return result, errors.New("卷不存在")
 		}
-		if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {
+		if err := s.executor.EnsureShareTopPermissions(volume.Path); err != nil {
 			return result, err
 		}
 	}
@@ -505,7 +505,11 @@ func (s *SMBService) applyConfig(ctx context.Context) error {
 		},
 	}
 	for _, volume := range volumes {
-		if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {
+		// Only ensure the share root itself is sane on every reload — a full
+		// recursive walk of every share on every config apply would block the
+		// API for minutes on large trees and disrupt active SMB sessions.
+		// The recursive walk runs once when the volume is created/updated.
+		if err := s.executor.EnsureShareTopPermissions(volume.Path); err != nil {
 			return err
 		}
 		share := smb.ShareSection{ShareName: volume.ShareName, Path: volume.Path, Comment: volume.Comment, Browseable: volume.Browseable, GuestOK: volume.GuestOK, ForceGroup: s.executor.ManagedGroup()}

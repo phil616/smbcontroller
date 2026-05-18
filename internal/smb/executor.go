@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -13,6 +14,12 @@ import (
 
 	"smb-controller/internal/config"
 )
+
+// maxPermissionWalkErrors caps how many per-entry chown/chmod failures we log
+// before going silent for the rest of the walk. The walk itself keeps going so
+// that one bad file inside a deep share does not leave the rest of the tree
+// half-fixed (Windows clients otherwise see "denied" for unrelated paths).
+const maxPermissionWalkErrors = 20
 
 type Executor struct {
 	reloadCommand  string
@@ -76,19 +83,49 @@ func (e *Executor) AddUserToManagedGroup(username string) error {
 }
 
 func (e *Executor) EnsureSharePathPermissions(path string) error {
-	if err := e.EnsureManagedGroup(); err != nil {
+	gid, err := e.managedGroupGID()
+	if err != nil {
 		return err
+	}
+	return ensureShareTreePermissions(path, gid)
+}
+
+// EnsureShareTopPermissions only fixes ownership/mode on the share root
+// directory itself. It is meant for fast paths (config reload, permission
+// changes) where the full recursive walk done by EnsureSharePathPermissions
+// would be prohibitively slow on large/deep trees and would also interfere
+// with active SMB clients.
+func (e *Executor) EnsureShareTopPermissions(path string) error {
+	gid, err := e.managedGroupGID()
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("share path must not be a symlink: %s", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("share path must be a directory: %s", path)
+	}
+	return applyShareEntryPerms(path, info.Mode(), gid, true)
+}
+
+func (e *Executor) managedGroupGID() (int, error) {
+	if err := e.EnsureManagedGroup(); err != nil {
+		return 0, err
 	}
 	group, err := user.LookupGroup(e.managedGroup)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	gid, err := strconv.Atoi(group.Gid)
 	if err != nil {
-		return fmt.Errorf("invalid gid for group %s: %w", e.managedGroup, err)
+		return 0, fmt.Errorf("invalid gid for group %s: %w", e.managedGroup, err)
 	}
-
-	return ensureShareTreePermissions(path, gid)
+	return gid, nil
 }
 
 func ensureShareTreePermissions(path string, gid int) error {
@@ -103,13 +140,38 @@ func ensureShareTreePermissions(path string, gid int) error {
 		return fmt.Errorf("share path must be a directory: %s", path)
 	}
 
+	if err := applyShareEntryPerms(path, info.Mode(), gid, true); err != nil {
+		return err
+	}
+
+	loggedErrors := 0
 	return filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			// Tolerate per-entry walk errors (e.g. a file removed by an active
+			// SMB session between readdir and lstat). Without this, one
+			// transient ENOENT/EACCES aborted the entire share sync and left
+			// the tree half-converted, which is exactly the failure mode
+			// Windows users report as "无法使用".
+			if entryPath == path {
+				return walkErr
+			}
+			logWalkError(&loggedErrors, entryPath, walkErr)
+			if entry != nil && entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entryPath == path {
+			// Root already handled above.
+			return nil
 		}
 		entryInfo, err := entry.Info()
 		if err != nil {
-			return err
+			logWalkError(&loggedErrors, entryPath, err)
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if entryInfo.Mode()&os.ModeSymlink != 0 {
 			if entry.IsDir() {
@@ -117,24 +179,56 @@ func ensureShareTreePermissions(path string, gid int) error {
 			}
 			return nil
 		}
-		if err := os.Chown(entryPath, -1, gid); err != nil {
-			return fmt.Errorf("failed to set share group on %s: %w", entryPath, err)
-		}
-		mode := entryInfo.Mode()
-		switch {
-		case entryInfo.IsDir():
-			// #nosec G302 -- Samba share directories intentionally need group traversal/write access and setgid inheritance.
-			if err := os.Chmod(entryPath, mode|os.ModeSetgid|0770); err != nil {
-				return fmt.Errorf("failed to set share directory permissions on %s: %w", entryPath, err)
-			}
-		case mode.IsRegular():
-			// #nosec G302 -- read/write SMB users need group read/write on existing files; execute bits are preserved as-is.
-			if err := os.Chmod(entryPath, mode|0060); err != nil {
-				return fmt.Errorf("failed to set share file permissions on %s: %w", entryPath, err)
-			}
+		if err := applyShareEntryPerms(entryPath, entryInfo.Mode(), gid, false); err != nil {
+			logWalkError(&loggedErrors, entryPath, err)
 		}
 		return nil
 	})
+}
+
+// applyShareEntryPerms chowns a single entry to the managed group and ORs in
+// the minimum permission bits a member of that group needs to use it. We never
+// remove existing bits, so users who deliberately opened their files more
+// widely are left alone.
+//
+// For files we OR in 0660 instead of just 0060 — without owner rw, a file
+// created by user X with restrictive mode (e.g. 0040, 0006) becomes
+// inaccessible to X over SMB even though group members can use it, because
+// POSIX checks owner bits first when the accessing uid matches the owner.
+func applyShareEntryPerms(entryPath string, mode os.FileMode, gid int, strict bool) error {
+	if err := os.Chown(entryPath, -1, gid); err != nil {
+		return fmt.Errorf("failed to set share group on %s: %w", entryPath, err)
+	}
+	switch {
+	case mode.IsDir():
+		// #nosec G302 -- Samba share directories intentionally need group traversal/write access and setgid inheritance.
+		if err := os.Chmod(entryPath, mode|os.ModeSetgid|0770); err != nil {
+			if strict {
+				return fmt.Errorf("failed to set share directory permissions on %s: %w", entryPath, err)
+			}
+			return err
+		}
+	case mode.IsRegular():
+		// #nosec G302 -- read/write SMB users need owner+group read/write on existing files; execute bits are preserved as-is.
+		if err := os.Chmod(entryPath, mode|0660); err != nil {
+			if strict {
+				return fmt.Errorf("failed to set share file permissions on %s: %w", entryPath, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func logWalkError(counter *int, path string, err error) {
+	if *counter >= maxPermissionWalkErrors {
+		return
+	}
+	*counter++
+	log.Printf("smb permission walk: skipping %s: %v", path, err)
+	if *counter == maxPermissionWalkErrors {
+		log.Printf("smb permission walk: suppressing further errors (>%d) for this run", maxPermissionWalkErrors)
+	}
 }
 
 func (e *Executor) DeleteSmbUser(username string) error {
