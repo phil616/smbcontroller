@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"smb-controller/internal/config"
 )
@@ -87,14 +88,28 @@ func (e *Executor) EnsureSharePathPermissions(path string) error {
 	if err != nil {
 		return err
 	}
-	return ensureShareTreePermissions(path, gid)
+	log.Printf("smb permission walk: start path=%s gid=%d group=%s", path, gid, e.managedGroup)
+	start := time.Now()
+	if err := ensureShareTreePermissions(path, gid); err != nil {
+		return err
+	}
+	log.Printf("smb permission walk: chown/chmod done path=%s elapsed=%s", path, time.Since(start))
+	// POSIX ACLs are the only reliable way to guarantee that an SMB user can
+	// touch a file created by a *different* SMB user, regardless of POSIX
+	// ownership or mode bits the original creator may have set. The walk
+	// above gets us most of the way there via chown+chmod, but a file whose
+	// original owner deliberately chmod'd to 0600 still locks out the group
+	// — ACLs make the managed group's rwx access independent of mode bits.
+	return e.applyManagedACL(path, true)
 }
 
 // EnsureShareTopPermissions only fixes ownership/mode on the share root
 // directory itself. It is meant for fast paths (config reload, permission
 // changes) where the full recursive walk done by EnsureSharePathPermissions
 // would be prohibitively slow on large/deep trees and would also interfere
-// with active SMB clients.
+// with active SMB clients. The top-level default ACL is still set so that
+// any *new* entries created under the root inherit the managed group's
+// rwx access automatically.
 func (e *Executor) EnsureShareTopPermissions(path string) error {
 	gid, err := e.managedGroupGID()
 	if err != nil {
@@ -110,7 +125,60 @@ func (e *Executor) EnsureShareTopPermissions(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("share path must be a directory: %s", path)
 	}
-	return applyShareEntryPerms(path, info.Mode(), gid, true)
+	if err := applyShareEntryPerms(path, info.Mode(), gid, true); err != nil {
+		return err
+	}
+	return e.applyManagedACL(path, false)
+}
+
+// applyManagedACL grants the managed group rwx via POSIX ACL on the share
+// root (and recursively when recurse=true), and installs a default ACL so
+// every newly created file/directory inherits the same grant.
+//
+// setfacl is the single most effective fix for the "file created by user A
+// cannot be modified by user B" class of bugs: ACL entries are evaluated
+// independently of mode bits, so user B's group membership is honoured even
+// when user A locked the file down to 0600.
+//
+// We treat missing setfacl as a soft failure (log a warning, return nil) so
+// the controller still works on minimal systems. Filesystems that do not
+// support ACLs (some FUSE / NFS exports) will surface EOPNOTSUPP from
+// setfacl — also logged but not fatal, since chown+chmod already ran.
+func (e *Executor) applyManagedACL(path string, recurse bool) error {
+	if _, err := exec.LookPath("setfacl"); err != nil {
+		log.Printf("smb acl: setfacl not found in PATH; skipping ACL setup for %s (install the 'acl' package for full multi-user support)", path)
+		return nil
+	}
+
+	// "rwX" on the access ACL means: rw for everything, plus x only where it
+	// already applies (directories or already-executable files). This keeps
+	// us from accidentally marking every regular file executable.
+	accessSpec := fmt.Sprintf("u::rwX,g::rwX,g:%s:rwX,m::rwX,o::---", e.managedGroup)
+	// Default ACL only applies to directories; entries inherit it on creation.
+	// Use plain "rwx" here because new directories should always be traversable.
+	defaultSpec := fmt.Sprintf("u::rwx,g::rwx,g:%s:rwx,m::rwx,o::---", e.managedGroup)
+
+	args := []string{}
+	if recurse {
+		args = append(args, "-R")
+	}
+	args = append(args, "-m", accessSpec, path)
+	if err := run("setfacl", args...); err != nil {
+		log.Printf("smb acl: setfacl access ACL failed for %s (continuing with chown/chmod only): %v", path, err)
+		return nil
+	}
+
+	defaultArgs := []string{}
+	if recurse {
+		defaultArgs = append(defaultArgs, "-R")
+	}
+	defaultArgs = append(defaultArgs, "-d", "-m", defaultSpec, path)
+	if err := run("setfacl", defaultArgs...); err != nil {
+		log.Printf("smb acl: setfacl default ACL failed for %s (new files may not inherit group access): %v", path, err)
+		return nil
+	}
+	log.Printf("smb acl: applied recursive=%v group=%s path=%s", recurse, e.managedGroup, path)
+	return nil
 }
 
 func (e *Executor) managedGroupGID() (int, error) {

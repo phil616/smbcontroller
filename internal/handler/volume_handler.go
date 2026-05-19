@@ -75,3 +75,16 @@ func (h *Handler) deleteVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
+
+func (h *Handler) repairVolumePermissions(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	volume, err := h.services.SMB.RepairVolumePermissions(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "volume": volume})
+}

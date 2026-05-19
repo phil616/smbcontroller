@@ -69,6 +69,21 @@ func main() {
 	go cleanupTemporaryUsers(services, stopTemporaryUsers)
 	defer close(stopTemporaryUsers)
 
+	// Auto-repair every enabled volume on startup. This is what makes a
+	// simple "upgrade binary + systemctl restart" actually fix the
+	// "files created by user A are inaccessible to user B" problem on
+	// pre-existing shares — without this, the recursive walk only runs
+	// when the operator clicks Save in the UI or hits the /repair endpoint,
+	// which they have no reason to do after a routine upgrade. Runs in a
+	// goroutine so a large share does not delay the HTTP listener.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		log.Printf("startup repair: walking enabled volumes...")
+		repaired, failed := services.SMB.RepairAllVolumes(ctx)
+		log.Printf("startup repair: done repaired=%d failed=%d", repaired, failed)
+	}()
+
 	webSubFS, err := fs.Sub(embeddedWeb, "web")
 	if err != nil {
 		log.Fatalf("failed to load embedded web fs: %v", err)

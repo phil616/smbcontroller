@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +176,52 @@ func (s *SMBService) DeleteVolume(ctx context.Context, id int64) error {
 		return err
 	}
 	return s.applyConfig(ctx)
+}
+
+// RepairVolumePermissions force-runs the full recursive chown+chmod+ACL pass
+// on a single share. This is the user-facing escape hatch for the
+// "files created by another user are inaccessible" problem: it does the same
+// work as CreateVolume's initial walk but on demand, so an operator can fix
+// an existing share without deleting and recreating it.
+func (s *SMBService) RepairVolumePermissions(ctx context.Context, id int64) (*models.Volume, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	volume, err := s.repos.Volumes.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if volume == nil {
+		return nil, errors.New("volume not found")
+	}
+	if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {
+		return nil, err
+	}
+	return volume, nil
+}
+
+// RepairAllVolumes walks every enabled volume and re-applies ownership, mode,
+// and ACL. Meant to be called once on service startup so that an operator who
+// upgrades the binary and restarts the service automatically gets a clean
+// permission state — they do not need to remember to click "repair" on each
+// share. Failures on individual volumes are logged but do not abort the rest,
+// since one broken mount should not prevent the others from being fixed.
+func (s *SMBService) RepairAllVolumes(ctx context.Context) (repaired int, failed int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	volumes, err := s.repos.Volumes.Enabled(ctx)
+	if err != nil {
+		log.Printf("startup repair: list volumes failed: %v", err)
+		return 0, 0
+	}
+	for _, volume := range volumes {
+		if err := s.executor.EnsureSharePathPermissions(volume.Path); err != nil {
+			log.Printf("startup repair: volume %d (%s) at %s failed: %v", volume.ID, volume.ShareName, volume.Path, err)
+			failed++
+			continue
+		}
+		repaired++
+	}
+	return repaired, failed
 }
 
 func (s *SMBService) ListUsers(ctx context.Context) ([]models.SmbUser, error) {

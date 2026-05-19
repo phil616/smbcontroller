@@ -45,6 +45,7 @@ func RegisterRoutes(r chi.Router, services *service.Services, sessions *session.
 			protected.Get("/volumes/{id}", h.getVolume)
 			protected.Put("/volumes/{id}", h.updateVolume)
 			protected.Delete("/volumes/{id}", h.deleteVolume)
+			protected.Post("/volumes/{id}/repair", h.repairVolumePermissions)
 
 			protected.Get("/users", h.listUsers)
 			protected.Post("/users", h.createUser)
